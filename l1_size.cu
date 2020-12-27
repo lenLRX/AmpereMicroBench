@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <stdint.h>
-#define THREADS_NUM 1024
+#define THREADS_NUM 32
 #define WARP_SIZE 32
 // const int L1_SIZE_BYTE = 192 * 1024;
 //const int L1_SIZE_BYTE = 256 * 1024;
@@ -35,9 +35,7 @@ __global__ void l1_bw(uint32_t *startClk, uint32_t *stopClk, double *dsink,
 
   for (uint32_t i = 0; i < l1_size; i += THREADS_NUM) {
     double *ptr = (double *)posArray + i;
-    // every warp loads all data in l1 cache
-    for (uint32_t j = 0; j < THREADS_NUM; j += WARP_SIZE) {
-      uint32_t offset = (tid + j) % THREADS_NUM;
+      uint32_t offset = tid;
       asm volatile("{\t\n"
                    ".reg .f64 data;\n\t"
                    "ld.global.ca.f64 data, [%1];\n\t"
@@ -46,7 +44,6 @@ __global__ void l1_bw(uint32_t *startClk, uint32_t *stopClk, double *dsink,
                    : "+d"(sink)
                    : "l"(ptr + offset)
                    : "memory");
-    }
   }
   // synchronize all threads
   asm volatile("bar.sync 0;");
@@ -68,8 +65,8 @@ void GetSharedSize() {
 }
 
 int main() {
-    std::ofstream ofs("l1_bw.csv");
-    ofs << "l1_size,bw(GB/s)\n";
+    std::ofstream ofs("l1_size.csv");
+    ofs << "l1_size(kb),bw(GB/s)\n";
     for (int i = 128;i < 256;++i) {
         ofs << i << ",";
         TestL1BandWidth(i * 1024, ofs);
@@ -117,17 +114,15 @@ void TestL1BandWidth(uint32_t test_cache_size, std::ofstream& ofs) {
   cudaGetDeviceProperties(&prop, 0);
   double clock_rate = prop.clockRate * 1000;
   //std::cout << "Device freq:" << prop.clockRate << "khz" << std::endl;
-  double load_time = THREADS_NUM / WARP_SIZE;
 
-  double total_transfer_byte = test_cache_size * load_time;
+  double total_transfer_byte = test_cache_size;
   double t = cycle_count / THREADS_NUM / clock_rate;
   double gb = 1024*1024*1024;
 
-  double bw_gb_s = total_transfer_byte/t/gb;
+  double bw_gb_s = test_cache_size/t/gb;
 
   std::cout << "TestSize: " << test_cache_size << std::endl;
   std::cout << "L1 BandWidth: " << bw_gb_s << "GByte/s" << std::endl;
-  std::cout << total_transfer_byte / (cycle_count / THREADS_NUM) << "Bytes/cycle" << std::endl;
   ofs << bw_gb_s << "\n";
 
   cudaFree(posArray_dev);
